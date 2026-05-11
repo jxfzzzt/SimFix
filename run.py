@@ -37,6 +37,7 @@ DEFAULT_D4J_HOME = "/home/zhouzhuotong/defects4j"
 PROJ_HOME = SIMFIX_ROOT / "projects"        # parent of <proj_lower>/<proj_lower>_<id>_buggy
 LOG_DIR = SIMFIX_ROOT / "run_logs"
 SUMMARY_JSON = LOG_DIR / "summary.json"
+TIME_JSON = LOG_DIR / "time.json"           # per-bug elapsed time, updated incrementally
 
 WORKERS = 32                                 # parallel SimFix processes
 TIMEOUT = 3600 * 3                           # outer per-bug timeout in seconds
@@ -85,6 +86,37 @@ def is_already_fixed(proj_lower: str, bug_id: int) -> bool:
     for _ in p.rglob("*.java"):
         return True
     return False
+
+
+def load_time_map() -> Dict[str, Dict[str, dict]]:
+    """Load existing time.json (if any) so we don't clobber previous stats."""
+    if not TIME_JSON.is_file():
+        return {}
+    try:
+        data = json.loads(TIME_JSON.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    cleaned: Dict[str, Dict[str, dict]] = {}
+    for proj, items in data.items():
+        if isinstance(items, dict):
+            cleaned[str(proj)] = {str(k): v for k, v in items.items()}
+    return cleaned
+
+
+def save_time_map(time_map: Dict[str, Dict[str, dict]]) -> None:
+    """Persist time.json with stable ordering: project asc, bug_id asc."""
+    TIME_JSON.parent.mkdir(parents=True, exist_ok=True)
+    ordered: Dict[str, Dict[str, dict]] = {}
+    for proj in sorted(time_map.keys()):
+        items = time_map[proj]
+        try:
+            keys = sorted(items.keys(), key=lambda x: int(x))
+        except ValueError:
+            keys = sorted(items.keys())
+        ordered[proj] = {k: items[k] for k in keys}
+    TIME_JSON.write_text(json.dumps(ordered, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +196,7 @@ def main() -> int:
     print(f"[run.py] workers       : {WORKERS}  timeout: {TIMEOUT}s  heap: {HEAP}")
     print(f"[run.py] skip_fixed    : {SKIP_FIXED}")
     print(f"[run.py] log_dir       : {LOG_DIR}")
+    print(f"[run.py] time_json     : {TIME_JSON}")
     print()
 
     tasks = []
@@ -184,6 +217,7 @@ def main() -> int:
         "SKIPPED":  "\033[1;36m",
         "MISSING":  "\033[1;31m",
     }
+    time_map: Dict[str, Dict[str, dict]] = load_time_map()
     with cf.ProcessPoolExecutor(max_workers=max(1, WORKERS)) as pool:
         future_map = {pool.submit(_run_one, t): (t[0], t[1]) for t in tasks}
         for fut in cf.as_completed(future_map):
@@ -200,6 +234,16 @@ def main() -> int:
             print(f"  {color}[{tag}]{reset} {res['proj']:9} "
                   f"{res['id']:>3}  {res['elapsed']:7.1f}s{extra}  "
                   f"-> {res.get('log','')}")
+
+            proj_entry = time_map.setdefault(res["proj"], {})
+            proj_entry[str(res["id"])] = {
+                "elapsed": round(float(res.get("elapsed", 0.0)), 2),
+                "status": res["status"],
+            }
+            try:
+                save_time_map(time_map)
+            except OSError as exc:
+                print(f"[run.py] warn: failed to write {TIME_JSON}: {exc}")
 
     total_elapsed = time.time() - started_all
     counts = {"fixed": 0, "no_patch": 0, "timeout": 0, "fail": 0,
@@ -233,6 +277,11 @@ def main() -> int:
     SUMMARY_JSON.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY_JSON.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"[run.py] summary -> {SUMMARY_JSON}")
+    try:
+        save_time_map(time_map)
+        print(f"[run.py] time    -> {TIME_JSON}")
+    except OSError as exc:
+        print(f"[run.py] warn: failed to write {TIME_JSON}: {exc}")
     return 0 if counts.get("fail", 0) == 0 and counts.get("missing", 0) == 0 else 1
 
 
