@@ -38,8 +38,8 @@ PROJ_HOME = SIMFIX_ROOT / "projects"        # parent of <proj_lower>/<proj_lower
 LOG_DIR = SIMFIX_ROOT / "run_logs"
 SUMMARY_JSON = LOG_DIR / "summary.json"
 
-WORKERS = 12                                  # parallel SimFix processes
-TIMEOUT = 1800                               # outer per-bug timeout in seconds
+WORKERS = 32                                 # parallel SimFix processes
+TIMEOUT = 3600 * 3                           # outer per-bug timeout in seconds
 HEAP = "4g"                                  # JVM -Xmx
 JAVA_BIN: str | None = None                  # None => auto-detect from PATH
 SKIP_FIXED = True                            # skip bugs whose patch/<proj>/<id> already has *.java
